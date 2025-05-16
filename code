@@ -1,0 +1,175 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <NewPing.h> 
+
+const char *ssid = "Realme 11"; 
+const char *password = "Theju123"; 
+
+#define TRIGGER_PIN 5 
+#define ECHO_PIN 18 
+#define MAX_DISTANCE 200 
+
+NewPing sonar(TRIGGER_PIN, ECHO_PIN, MAX_DISTANCE); 
+
+const int EMERGENCY_THRESHOLD_CM = 30; 
+
+WebServer server(80); 
+
+unsigned long lastReadTime = 0;
+const long READ_INTERVAL = 1000; 
+float distanceCm = 0; 
+bool emergencyStatus = false;
+
+void handleRoot() {
+  String htmlContent = "<!DOCTYPE html>";
+  htmlContent += "<html>";
+  htmlContent += "<head>";
+  htmlContent += "<title>Traffic Monitor</title>";
+  htmlContent += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  htmlContent += "<style>";
+  htmlContent += "body {";
+  htmlContent += "  font-family: Arial, sans-serif;";
+  htmlContent += "  text-align: center;";
+  htmlContent += "  background-color: #f0f0f0;";
+  htmlContent += "  margin: 0;";
+  htmlContent += "  padding: 0;";
+  htmlContent += "}";
+  htmlContent += ".container {";
+  htmlContent += "  max-width: 95%;";
+  htmlContent += "  margin: 10px auto;";
+  htmlContent += "  padding: 20px;";
+  htmlContent += "  background-color: #ffffff;";
+  htmlContent += "  border-radius: 8px;";
+  htmlContent += "  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);";
+  htmlContent += "}";
+  htmlContent += "h1 {";
+  htmlContent += "  color: #333;";
+  htmlContent += "  font-size: 1.8em;";
+  htmlContent += "  margin-bottom: 0.5em;";
+  htmlContent += "}";
+  htmlContent += "p {";
+  htmlContent += "  font-size: 1.2em;";
+  htmlContent += "  margin-bottom: 0.5em;";
+  htmlContent += "}";
+  htmlContent += ".emergency {";
+  htmlContent += "  color: red;";
+  htmlContent += "  font-weight: bold;";
+  htmlContent += "}";
+  htmlContent += ".normal {";
+  htmlContent += "  color: green;";
+  htmlContent += "  font-weight: bold;";
+  htmlContent += "}";
+  htmlContent += "button {";
+  htmlContent += "  background-color: #4CAF50;";
+  htmlContent += "  color: white;";
+  htmlContent += "  padding: 10px 20px;";
+  htmlContent += "  text-align: center;";
+  htmlContent += "  text-decoration: none;";
+  htmlContent += "  display: inline-block;";
+  htmlContent += "  font-size: 1em;";
+  htmlContent += "  border-radius: 5px;";
+  htmlContent += "  border: none;";
+  htmlContent += "  cursor: pointer;";
+  htmlContent += "  margin-top: 10px;";
+  htmlContent += "}";
+  htmlContent += "button:hover {";
+  htmlContent += "  background-color: #367c39;";
+  htmlContent += "}";
+  htmlContent += "</style>";
+  htmlContent += "</head>";
+  htmlContent += "<body>";
+  htmlContent += "<div class='container'>";
+  htmlContent += "<h1>Traffic Monitoring System</h1>";
+  htmlContent += "<p>Distance: <span id='distance'>" + String(distanceCm) + "</span> cm</p>";
+  htmlContent += "<p>Status: <span id='status' class='";
+  if (emergencyStatus) {
+    htmlContent += "emergency";
+  } else {
+    htmlContent += "normal";
+  }
+  htmlContent += "'>";
+  if (emergencyStatus) {
+    htmlContent += "Emergency";
+  } else {
+    htmlContent += "Normal";
+  }
+  htmlContent += "</span></p>";
+  htmlContent += "<button onclick='window.location.reload();'>Refresh</button>";
+  htmlContent += "</div>";
+  htmlContent += "<script>";
+  htmlContent += "setInterval(function() {";
+  htmlContent += "  var xhr = new XMLHttpRequest();";
+  htmlContent += "  xhr.open('GET', '/data', true);";
+  htmlContent += "  xhr.onreadystatechange = function() {";
+  htmlContent += "    if (xhr.readyState == 4 && xhr.status == 200) {";
+  htmlContent += "      var data = JSON.parse(xhr.responseText);";
+  htmlContent += "      document.getElementById('distance').innerHTML = data.distance;";
+  htmlContent += "      document.getElementById('status').innerHTML = data.status;";
+  htmlContent += "      var statusElement = document.getElementById('status');";
+  htmlContent += "      if (data.status === 'Emergency') {";
+  htmlContent += "        statusElement.className = 'emergency';";
+  htmlContent += "      } else {";
+  htmlContent += "        statusElement.className = 'normal';";
+  htmlContent += "      }";
+  htmlContent += "    }";
+  htmlContent += "  };";
+  htmlContent += "  xhr.send();";
+  htmlContent += "}, 1000);";
+  htmlContent += "</script>";
+  htmlContent += "</body>";
+  htmlContent += "</html>";
+  server.send(200, "text/html", htmlContent);
+}
+
+void handleData() {
+  String jsonData = "{";
+  jsonData += "\"distance\":\"" + String(distanceCm) + "\",";
+  jsonData += "\"status\":\"" + String(emergencyStatus ? "Emergency" : "Normal") + "\"";
+  jsonData += "}";
+  server.send(200, "application/json", jsonData);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) { 
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConnected to WiFi");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP()); 
+  } else {
+    Serial.println("\nFailed to connect to WiFi. Check credentials and restart.");
+    while (1) {
+      delay(1000); 
+    }
+  }
+
+  server.on("/", handleRoot);
+  server.on("/data", handleData);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+
+  if (millis() - lastReadTime > READ_INTERVAL) {
+    lastReadTime = millis();
+    unsigned int uS = sonar.ping();
+    distanceCm = sonar.convert_cm(uS);
+
+    emergencyStatus = (distanceCm > 0 && distanceCm < EMERGENCY_THRESHOLD_CM);
+
+    Serial.print("Distance: ");
+    Serial.print(distanceCm);
+    Serial.print(" cm, Status: ");
+    Serial.println(emergencyStatus ? "Emergency" : "Normal");
+  }
+}
